@@ -2,6 +2,8 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { onRetry, isHttpRetryable } from "../../infra/retry-http.js";
+import { retryAsync } from "../../infra/retry.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -491,7 +493,11 @@ async function maybeFetchFirecrawlWebFetchPayload(
     return null;
   }
 
-  const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+  const firecrawl = await retryAsync(async () => await fetchFirecrawlContent(firecrawlParams), {
+    label: "web-fetch-firecrawl",
+    shouldRetry: isHttpRetryable,
+    onRetry: (info) => onRetry(console.warn, info),
+  });
   const payload = buildFirecrawlWebFetchPayload({
     firecrawl,
     rawUrl: params.url,
@@ -540,7 +546,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
-    });
+    );
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
@@ -691,7 +697,11 @@ async function tryFirecrawlFallback(
     return null;
   }
   try {
-    const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+    const firecrawl = await retryAsync(async () => await fetchFirecrawlContent(firecrawlParams), {
+      label: "web-fetch-firecrawl-fallback",
+      shouldRetry: isHttpRetryable,
+      onRetry: (info) => onRetry(console.warn, info),
+    });
     return { text: firecrawl.text, title: firecrawl.title };
   } catch {
     return null;

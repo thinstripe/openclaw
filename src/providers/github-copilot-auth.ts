@@ -3,6 +3,7 @@ import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profil
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { retryHttpAsync } from "../infra/retry-http.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 
@@ -43,18 +44,18 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
-  });
-
-  if (!res.ok) {
-    throw new Error(`GitHub device code failed: HTTP ${res.status}`);
-  }
+  const res = await retryHttpAsync(
+    () =>
+      fetch(DEVICE_CODE_URL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+      }),
+    { label: "github-copilot-device-code" },
+  );
 
   const json = parseJsonResponse<DeviceCodeResponse>(await res.json());
   if (!json.device_code || !json.user_code || !json.verification_uri) {
@@ -75,18 +76,18 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: bodyBase,
-    });
-
-    if (!res.ok) {
-      throw new Error(`GitHub device token failed: HTTP ${res.status}`);
-    }
+    const res = await retryHttpAsync(
+      () =>
+        fetch(ACCESS_TOKEN_URL, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: bodyBase,
+        }),
+      { label: "github-copilot-access-token" },
+    );
 
     const json = parseJsonResponse<DeviceTokenResponse>(await res.json());
     if ("access_token" in json && typeof json.access_token === "string") {

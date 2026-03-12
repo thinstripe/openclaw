@@ -1,5 +1,6 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
+import { retryHttpAsync } from "../infra/retry-http.js";
 
 const QWEN_OAUTH_BASE_URL = "https://chat.qwen.ai";
 const QWEN_OAUTH_TOKEN_ENDPOINT = `${QWEN_OAUTH_BASE_URL}/api/v1/oauth2/token`;
@@ -13,28 +14,36 @@ export async function refreshQwenPortalCredentials(
     throw new Error("Qwen OAuth refresh token missing; re-authenticate.");
   }
 
-  const response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
+  const response = await retryHttpAsync(
+    () =>
+      fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: QWEN_OAUTH_CLIENT_ID,
+        }),
+      }),
+    {
+      label: "qwen-portal-refresh-token",
+      onResponse: async (r) => {
+        if (!r.ok) {
+          if (r.status === 400) {
+            throw new Error(
+              `Qwen OAuth refresh token expired or invalid. Re-authenticate with \`${formatCliCommand("openclaw models auth login --provider qwen-portal")}\`.`,
+            );
+          }
+          const text = await r.text();
+          throw new Error(`Qwen OAuth refresh failed: ${text || r.statusText}`);
+        }
+        return r;
+      },
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: QWEN_OAUTH_CLIENT_ID,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    if (response.status === 400) {
-      throw new Error(
-        `Qwen OAuth refresh token expired or invalid. Re-authenticate with \`${formatCliCommand("openclaw models auth login --provider qwen-portal")}\`.`,
-      );
-    }
-    throw new Error(`Qwen OAuth refresh failed: ${text || response.statusText}`);
-  }
+  );
 
   const payload = (await response.json()) as {
     access_token?: string;
